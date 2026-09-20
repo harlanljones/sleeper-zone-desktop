@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+# dev — primary entrypoint for development on the sleeper-zone-desktop repo under Hermes.
+#
+# Usage:
+#   ./dev              launch an interactive Hermes session (sleeper profile)
+#   ./dev -q "prompt"  one-shot query (args pass straight through to hermes)
+#   ./dev setup        bootstrap only: profile, project skills, trust
+#   ./dev doctor       verify the environment without launching
+#
+# Idempotent: safe to run repeatedly. Never modifies ~/.hermes (default
+# profile) — everything happens under the `sleeper` profile or this repo.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROFILE="sleeper"
+
+cd "$REPO_ROOT"
+
+if ! command -v hermes >/dev/null 2>&1; then
+  echo "error: hermes not on PATH (install: curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash)" >&2
+  exit 1
+fi
+
+# Rust toolchain (rustup installs to ~/.cargo/bin, not always on PATH)
+[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+
+profile_exists() {
+  hermes profile list 2>/dev/null | grep -qE "^[│┃ ]*${PROFILE}( |$|…)" || \
+    [ -d "$HOME/.hermes/profiles/${PROFILE}" ]
+}
+
+# Skills disabled in the sleeper profile — everything not relevant to
+# this repo (Rust performance rebuild of a web app). Kept here so a fresh
+# machine can rebuild the profile exactly. Single-line heredoc JSON —
+# multi-line expansion through $(...) corrupts config.yaml.
+build_disabled_list() {
+  cat <<'JSON'
+["agent-reach","ai-image-generation","animate","animate-expo","animation-vocabulary","apple-design","ask-sonner","agents-sdk","archify","architecture-diagram","ascii-video","baoyu-infographic","claude-design","design-md","humanizer","impeccable","manim-video","p5js","popular-web-designs","songwriting-and-ai-music","chezmoi-dotfiles","company-brain-demo","docker-nextjs","hermes-repo-devsetup","nextjs-docker-env","omarchy-hyprland-config","omarchy-plugins","vercel-env-secrets","editor","emil-design-eng","find-animation-opportunities","flyai","improve-animations","market-competitor-research","gif-search","songsee","youtube-content","obsidian","airtable","box","document-to-action-items","docx","google-workspace","maps","meeting-action-items","notion","pdf","powerpoint","product-price-monitor","teams-meeting-pipeline","weekly-review-planning","xlsx","email-inbox-triage","himalaya","pick-ui-library","repo-scaffold","arxiv","competitor-news-monitor","grounded-citations","llm-wiki","review-animations","scrollcraft","blocked-page-recovery","write-swift","supabase","supabase-postgres-best-practices","sqlite","watch","xurl","dogfood","inspecting-hermes-desktop-dom","python-debugpy","remotion-best-practices","remotion-captions","remotion-create","remotion-docs","remotion-interactivity","remotion-maps","remotion-markup","remotion-multimedia","remotion-render","remotion-saas","remotion-studio","remotion-upgrade","apple-notes","apple-reminders","findmy","imessage","browser-testing","node-inspect-debugger","migrate-to-shoehorn","turnstile-spin","sandbox-next","sandbox-stable","sandbox-migrate-to-next","durable-objects","workers-best-practices","cloudflare","cloudflare-email-service","cloudflare-one","cloudflare-one-migrations","wrangler","github-profile-readme","git-guardrails-claude-code","ask-matt","claude-handoff","codex","claude-code","opencode","computer-use"]
+JSON
+}
+
+ensure_profile() {
+  if profile_exists; then
+    return 0
+  fi
+  echo "[dev] creating '${PROFILE}' profile (cloned from default)..."
+  hermes profile create "$PROFILE" --clone \
+    --description "sleeper-zone-desktop dev: Rust rebuild of a web app for performance — lean skill set" >/dev/null
+}
+
+ensure_skill_prune() {
+  # Already configured? (non-empty skills.disabled in the profile config).
+  # config get renders stored lists as YAML bullets or a JSON array — accept both.
+  if hermes --profile "$PROFILE" config get skills.disabled 2>/dev/null \
+      | grep -qE '^(|- )'; then
+    return 0
+  fi
+  echo "[dev] pruning irrelevant skills from '${PROFILE}' profile..."
+  hermes --profile "$PROFILE" config set skills.disabled "$(build_disabled_list)" >/dev/null 2>&1 || true
+}
+
+ensure_hooks() {
+  local configured
+  configured="$(hermes --profile "$PROFILE" config get hooks.pre_tool_call 2>/dev/null || true)"
+  if printf '%s' "$configured" | grep -q 'sleeper-git-guard'; then
+    return 0
+  fi
+  echo "[dev] registering hook scripts in '${PROFILE}' profile..."
+  hermes --profile "$PROFILE" config set hooks.pre_tool_call \
+    '[{"matcher":"terminal|execute_code","command":"~/.hermes/agent-hooks/sleeper-git-guard.sh","timeout":10,"fail_closed":true}]' --force >/dev/null
+  hermes --profile "$PROFILE" config set hooks.post_tool_call \
+    '[{"matcher":"write_file|patch","command":"~/.hermes/agent-hooks/sleeper-formatter.sh","timeout":15},{"matcher":"terminal","command":"~/.hermes/agent-hooks/sleeper-evidence.sh","timeout":10}]' --force >/dev/null
+  hermes --profile "$PROFILE" config set hooks.pre_llm_call \
+    '[{"command":"~/.hermes/agent-hooks/sleeper-inject-git-status.sh","timeout":5}]' --force >/dev/null
+}
+
+ensure_project_skills() {
+  local missing=0
+  # software-development/ category
+  local -a sd=(test-driven-development systematic-debugging requesting-code-review \
+               simplify-code spike codebase-inspection github \
+               subagent-driven-development shell-portability \
+               hermes-agent-skill-authoring rust)
+  # other category dirs: name:category
+  local -a cats=(hermes-agent:autonomous-ai-agents 1password:security)
+  local -a root_lv=(unlazy)
+  mkdir -p .hermes/skills
+  local s t
+  for s in "${sd[@]}"; do
+    [ -e ".hermes/skills/$s/SKILL.md" ] || { ln -sfn "$HOME/.hermes/skills/software-development/$s" ".hermes/skills/$s"; missing=1; }
+  done
+  for pair in "${cats[@]}"; do
+    s="${pair%%:*}"; t="${pair##*:}"
+    [ -e ".hermes/skills/$s/SKILL.md" ] || { ln -sfn "$HOME/.hermes/skills/$t/$s" ".hermes/skills/$s"; missing=1; }
+  done
+  for s in "${root_lv[@]}"; do
+    [ -e ".hermes/skills/$s/SKILL.md" ] || { ln -sfn "$HOME/.hermes/skills/$s" ".hermes/skills/$s"; missing=1; }
+  done
+  # Broken links (e.g. skill moved between category dirs) — repair from anywhere.
+  # MUST use find -L: ~/.hermes/skills entries are often symlinks themselves.
+  for s in "${sd[@]}" "${cats[@]%%:*}" "${root_lv[@]}"; do
+    if [ -L ".hermes/skills/$s" ] && [ ! -e ".hermes/skills/$s/SKILL.md" ]; then
+      t="$(find -L "$HOME/.hermes/skills" -maxdepth 2 -type d -name "$s" 2>/dev/null | head -1)"
+      [ -n "$t" ] && ln -sfn "$t" ".hermes/skills/$s"
+    fi
+  done
+  [ "$missing" -eq 1 ] && echo "[dev] bootstrapped .hermes/skills project links"
+  return 0
+}
+
+ensure_trust() {
+  # Trust is stored per-profile; only run when this repo isn't trusted yet.
+  if ! hermes --profile "$PROFILE" skills trust . 2>&1 | grep -q "Already trusted"; then
+    echo "[dev] trusted repo for project skills"
+  fi
+  return 0
+}
+
+doctor() {
+  local fail=0
+  if profile_exists; then
+    echo "ok: profile '${PROFILE}' exists"
+  else
+    echo "MISSING: profile '${PROFILE}'"; fail=1
+  fi
+  if [ -d .hermes/skills ]; then
+    local broken=0
+    for d in .hermes/skills/*/; do
+      [ -e "${d}SKILL.md" ] || { echo "BROKEN: ${d}"; broken=1; fail=1; }
+    done
+    [ "$broken" -eq 0 ] && echo "ok: project skills links ($(find .hermes/skills -maxdepth 1 -mindepth 1 | wc -l | tr -d ' ') skills)"
+  else
+    echo "MISSING: .hermes/skills"; fail=1
+  fi
+  local count
+  count="$(hermes --profile "$PROFILE" skills trust . 2>&1 | grep -oE '[0-9]+ project skill' | grep -oE '^[0-9]+')"
+  echo "ok: ${count:-0} project skill(s) load in this repo"
+  # Prune guard: config get renders a stored list as YAML bullets or JSON array;
+  # an unset key prints 'Config key not set:' — that must NOT count as pruned.
+  if hermes --profile "$PROFILE" config get skills.disabled 2>/dev/null | grep -qE '^(\[|- )'; then
+    echo "ok: skills.disabled is a stored list ($(hermes --profile "$PROFILE" skills list 2>/dev/null | grep -c 'disabled' | tr -d ' ') disabled)"
+  else
+    echo "MISSING: skills.disabled prune not applied"; fail=1
+  fi
+  if hermes --profile "$PROFILE" config get hooks.pre_tool_call 2>/dev/null | grep -q 'sleeper-git-guard'; then
+    echo "ok: git-guard hook configured"
+  else
+    echo "MISSING: git-guard hook (profile config)"; fail=1
+  fi
+  local h
+  for h in sleeper-git-guard.sh sleeper-evidence.sh sleeper-formatter.sh sleeper-inject-git-status.sh; do
+    [ -x "$HOME/.hermes/agent-hooks/$h" ] || { echo "MISSING: hook script $h"; fail=1; }
+  done
+  [ "${fail:-0}" -eq 0 ] && echo "ok: all hook scripts executable"
+  if command -v cargo >/dev/null 2>&1; then
+    echo "ok: cargo ($(cargo --version))"
+  else
+    echo "MISSING: cargo (https://rustup.rs)"; fail=1
+  fi
+  [ -f Cargo.toml ] && echo "ok: Cargo.toml present"
+  echo "note: hook allowlist is per-profile — first session start may prompt, or run: hermes --profile $PROFILE --accept-hooks (once)"
+  return "$fail"
+}
+
+case "${1:-}" in
+  setup)
+    ensure_profile
+    ensure_skill_prune
+    ensure_hooks
+    ensure_project_skills
+    ensure_trust
+    echo "[dev] setup complete"
+    ;;
+  doctor)
+    ensure_profile 2>/dev/null || true
+    doctor || exit 1
+    ;;
+  *)
+    ensure_profile
+    ensure_skill_prune
+    ensure_hooks
+    ensure_project_skills
+    ensure_trust
+    exec hermes --profile "$PROFILE" "$@"
+    ;;
+esac
