@@ -3,4 +3,39 @@ name = "sleeper-zone-desktop"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "sleeper_zone"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sleeper-zone-desktop"
+path = "src/main.rs"
+
 [dependencies]
+eframe = { version = "0.33", default-features = false, features = [
+    "default_fonts",
+    "glow",
+    "wayland",
+    "x11",
+] }
+env_logger = "0.11"
+log = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "test-util"] }
+criterion = "0.7"
+
+[[bench]]
+name = "join"
+harness = false
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"

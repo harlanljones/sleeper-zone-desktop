@@ -1,0 +1,8 @@
+[env]
+# WSLg's libEGL probes for a GPU (Zink) and spams libEGL/MESA warnings
+# before falling back to software rendering. Force llvmpipe up front.
+LIBGL_ALWAYS_SOFTWARE = "1"
+GALLIUM_DRIVER = "llvmpipe"
+
+[tools]
+rust = "latest"

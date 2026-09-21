@@ -8,10 +8,13 @@ only — behavior parity is measured, not guessed.
 
 ## Status
 
-Fresh repository — the crate layout, build commands, and quality gate below
-are the planned baseline. Update each section with verified commands as the
-project takes shape; do not document a command here until it has been run
-successfully.
+Milestone 4 complete: egui shell (`src/app/`) — first-run username →
+league picker → live scoreboard rendering `TrackerSnapshot`s from the
+tracker thread's watch channel; config + player-cache persisted under
+`~/.config/sleeper-zone/`. Headless smoke: `cargo run -- --check-league
+<league_id>`. Run the app: `cargo run --release`. All four milestones
+of the build plan are complete; remaining work (notifications, stat
+lines, Windows packaging) was deferred by design.
 
 ## Where to work (planned layout)
 
