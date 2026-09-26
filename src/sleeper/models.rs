@@ -191,7 +191,8 @@ pub struct DraftPick {
     pub picked_by: Option<String>,
 }
 
-/// One player's stats payload: `{"stats": {"pass_yd": 315.0, ...}}`.
+/// One player's stats payload: the flat per-player map the stats
+/// endpoints return, e.g. `{"pass_yd": 315.0, "gp": 1.0}`.
 /// Non-numeric entries (null, strings, nested maps) are skipped rather
 /// than failing the multi-megabyte payload.
 #[derive(Debug, Clone, Default, PartialEq)]

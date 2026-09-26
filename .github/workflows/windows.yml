@@ -1,0 +1,60 @@
+name: windows
+
+# Windows packaging: full quality gate on windows-latest, then the
+# release exe plus the Inno Setup installer as artifacts.
+# Release flow: tag `v<version>` (matching Cargo.toml), CI attaches
+# `sleeper-zone-desktop-setup-<version>.exe` to the artifacts.
+
+"on":
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Quality gate
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+
+      - name: Release build
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Headless smoke (real APIs, known league)
+        run: ./target/x86_64-pc-windows-msvc/release/sleeper-zone-desktop.exe --check-league 289646328504385536
+
+      - name: Read package version
+        id: version
+        run: |
+          $v = (Select-String '^version = "(.*)"$' Cargo.toml).Matches[0].Groups[1].Value
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Installer (Inno Setup)
+        run: |
+          choco install innosetup --no-progress -y
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
+            /DMyAppVersion=${{ steps.version.outputs.version }} `
+            packaging/windows/installer.iss
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sleeper-zone-desktop-windows-${{ steps.version.outputs.version }}
+          path: |
+            target/x86_64-pc-windows-msvc/release/sleeper-zone-desktop.exe
+            packaging/windows/dist/sleeper-zone-desktop-setup-*.exe

@@ -1,4 +1,7 @@
-//! Config and cache persistence: `$XDG_CONFIG_HOME|~/.config/sleeper-zone/`.
+//! Config and cache persistence:
+//!
+//! - Unix: `$XDG_CONFIG_HOME|sleeper-zone/`, else `~/.config/sleeper-zone/`.
+//! - Windows: `%APPDATA%\sleeper-zone\`.
 //!
 //! - `config.json`: username, user id, tracked league ids.
 //! - `players.json`: the ~5 MB Sleeper player map, refreshed at most
@@ -24,15 +27,20 @@ pub struct Config {
 
 /// Base dir for config and cache files.
 pub fn config_dir() -> Option<PathBuf> {
-    let base = std::env::var("XDG_CONFIG_HOME")
-        .ok()
+    config_dir_inner(&|k| std::env::var(k).ok(), cfg!(windows))
+}
+
+/// Testable core: `windows` selects the `%APPDATA%` branch so the
+/// Windows layout is covered by tests on any host.
+fn config_dir_inner(get: &dyn Fn(&str) -> Option<String>, windows: bool) -> Option<PathBuf> {
+    if windows {
+        let appdata = get("APPDATA").filter(|s| !s.is_empty())?;
+        return Some(PathBuf::from(appdata).join("sleeper-zone"));
+    }
+    let base = get("XDG_CONFIG_HOME")
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var("HOME")
-                .ok()
-                .map(|h| PathBuf::from(h).join(".config"))
-        })?;
+        .or_else(|| get("HOME").map(|h| PathBuf::from(h).join(".config")))?;
     Some(base.join("sleeper-zone"))
 }
 
@@ -119,5 +127,43 @@ mod tests {
     fn config_resolves_under_home_config() {
         let dir = config_dir().expect("a HOME or XDG_CONFIG_HOME exists");
         assert!(dir.ends_with("sleeper-zone"), "dir: {dir:?}");
+    }
+
+    fn test_env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let map: std::collections::HashMap<String, String> = vars
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        move |k: &str| map.get(k).cloned()
+    }
+
+    #[test]
+    fn config_resolves_under_appdata_on_windows() {
+        let get = test_env(&[("APPDATA", r"C:\Users\coach\AppData\Roaming")]);
+        let dir = config_dir_inner(&get, true).expect("APPDATA set");
+        assert_eq!(
+            dir,
+            PathBuf::from(r"C:\Users\coach\AppData\Roaming").join("sleeper-zone"),
+        );
+    }
+
+    #[test]
+    fn config_windows_branch_needs_appdata() {
+        let get = test_env(&[]);
+        assert!(config_dir_inner(&get, true).is_none());
+    }
+
+    #[test]
+    fn config_unix_branch_prefers_xdg_over_home() {
+        let get = test_env(&[("XDG_CONFIG_HOME", "/tmp/xdg"), ("HOME", "/home/coach")]);
+        assert_eq!(
+            config_dir_inner(&get, false).expect("xdg set"),
+            PathBuf::from("/tmp/xdg/sleeper-zone"),
+        );
+        let home_only = test_env(&[("HOME", "/home/coach")]);
+        assert_eq!(
+            config_dir_inner(&home_only, false).expect("home set"),
+            PathBuf::from("/home/coach/.config/sleeper-zone"),
+        );
     }
 }

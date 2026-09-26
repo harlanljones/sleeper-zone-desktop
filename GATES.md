@@ -1,11 +1,15 @@
-# Gates: milestone-4 — egui shell
+# Gates: milestone-4 — egui shell, plus Windows packaging
 
-OWNS: src/app/**, src/main.rs, Cargo.toml, Cargo.lock, GATES.md
+OWNS: src/app/**, src/main.rs, Cargo.toml, Cargo.lock, GATES.md,
+  build.rs, packaging/**, .github/workflows/**
 
 Scope: The desktop app: first-run username → league picker → live
 scoreboard rendering TrackerSnapshots, config + player-cache
 persistence under the XDG config dir, and a headless `--check-league`
 mode that runs one real tracker tick for gate verification.
+Windows packaging: config resolves under %APPDATA% on Windows,
+Unix display backends are Linux-gated, and CI builds the release exe
+plus an Inno Setup installer on windows-latest.
 
 - [x] G1: Formatting is clean across the workspace.
   CHECK: cargo fmt --all -- --check && echo 'formatting gate passed'
@@ -28,3 +32,10 @@ mode that runs one real tracker tick for gate verification.
   CHECK: cargo run --quiet -- --check-league 289646328504385536 2>&1 | grep -q 'check ok' && echo 'headless check passed'
   EXPECT: headless check passed
   EVIDENCE: automatic-evidence=v1; definition-sha256=b90de2284d76a0b302c1661af9bd930c7af0ee0e8bf52dddabf0973e47fdc0b0; exit=0; EXPECT=matched; output-sha256=7cdbf89ced87e2172cce46054fbab776dbe3a3a7c57a0cbe8b3168492bdc2534; output-bytes=22; shell=/bin/sh; cwd=/home/harlan/sleeper-zone-desktop; path=bc85cc4d4c0d/86 entries
+
+- [ ] G5: Windows packaging: the Windows config layout is covered by
+  host-independent tests, and the installer + CI inputs are present.
+  The release exe itself is linked by the `windows` CI job (and was
+  verified once via a local zig cross-compile producing a PE32+ exe).
+  CHECK: cargo test --quiet config_ && python3 -c "import yaml; yaml.safe_load(open('.github/workflows/windows.yml'))" && test -f packaging/windows/installer.iss && echo 'packaging gate passed'
+  EXPECT: packaging gate passed

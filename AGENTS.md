@@ -11,10 +11,12 @@ only — behavior parity is measured, not guessed.
 Milestone 4 complete: egui shell (`src/app/`) — first-run username →
 league picker → live scoreboard rendering `TrackerSnapshot`s from the
 tracker thread's watch channel; config + player-cache persisted under
-`~/.config/sleeper-zone/`. Headless smoke: `cargo run -- --check-league
+`~/.config/sleeper-zone/` (`%APPDATA%\sleeper-zone\` on Windows).
+Headless smoke: `cargo run -- --check-league
 <league_id>`. Run the app: `cargo run --release`. All four milestones
-of the build plan are complete; remaining work (notifications, stat
-lines, Windows packaging) was deferred by design.
+of the build plan are complete, plus expanded stat lines and Windows
+packaging (`packaging/windows/`, `.github/workflows/windows.yml`);
+remaining work (notifications, code signing) is deferred by design.
 
 ## Where to work (planned layout)
 

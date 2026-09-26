@@ -1,4 +1,10 @@
 //! Binary entrypoint: launches the egui app, or runs a headless check.
+//!
+//! Windows note: this binary intentionally keeps the console subsystem
+//! (no `windows_subsystem = "windows"`). The headless `--check` modes
+//! report over stdout, and a windows-subsystem exe launched from a
+//! terminal cannot print there — so the packaged app opens a console
+//! window alongside the GUI. See packaging/windows/README.md.
 
 fn main() {
     env_logger::try_init().ok();

@@ -232,6 +232,10 @@ pub fn stats_view(
 }
 
 /// Compact human stat line for this week, keyed by position group.
+/// Stat keys are the live payload's flat per-player map (e.g.
+/// `{"pass_yd": 315.0, "rec_tgt": 7.0}`): targets and sacks taken for
+/// QBs/skill players, makes/attempts for kickers, takeaways and points
+/// allowed for team defenses.
 fn week_line(s: &PlayerStats, position: &str) -> String {
     let mut parts: Vec<String> = Vec::new();
     match position {
@@ -247,26 +251,69 @@ fn week_line(s: &PlayerStats, position: &str) -> String {
                 ("pass_yd", "pass yd"),
                 ("pass_td", "pass TD"),
                 ("pass_int", "INT"),
-                ("rush_yd", "rush yd"),
-                ("rush_td", "rush TD"),
             ] {
                 if s.get(key) > 0.0 {
                     parts.push(format!("{} {}", fmt_num(s.get(key)), label));
                 }
             }
+            if s.get("pass_sack") > 0.0 {
+                parts.push(format!("{} sacked", fmt_num(s.get("pass_sack"))));
+            }
+            if s.get("rush_att") > 0.0 {
+                parts.push(format!("{} att", fmt_num(s.get("rush_att"))));
+            }
+            for (key, label) in [("rush_yd", "rush yd"), ("rush_td", "rush TD")] {
+                if s.get(key) > 0.0 {
+                    parts.push(format!("{} {}", fmt_num(s.get(key)), label));
+                }
+            }
+            push_fumbles_2pt(s, &mut parts);
         }
         "K" => {
-            for key in s.stats.keys() {
-                if key.starts_with("fgm") || key == "xp" || key == "xpm" {
-                    parts.push(format!("{key} {}", fmt_num(s.get(key))));
+            // Makes/attempts read better than the raw distance-bucket
+            // keys (`fgm_30_39`, ...) the payload also carries.
+            let (fgm, fga) = (s.get("fgm"), s.get("fga"));
+            if fga > 0.0 || fgm > 0.0 {
+                parts.push(format!("{}/{} FG", fmt_num(fgm), fmt_num(fga)));
+            }
+            if s.get("fgm_lng") > 0.0 {
+                parts.push(format!("lng {}", fmt_num(s.get("fgm_lng"))));
+            }
+            let (xpm, xpa) = (s.get("xpm"), s.get("xpa"));
+            if xpa > 0.0 || xpm > 0.0 {
+                parts.push(format!("{}/{} XP", fmt_num(xpm), fmt_num(xpa)));
+            }
+        }
+        "DEF" => {
+            for (key, label) in [
+                ("sack", "sacks"),
+                ("int", "INT"),
+                ("fum_rec", "FR"),
+                ("ff", "FF"),
+                ("blk_kick", "blk"),
+                ("safe", "safety"),
+            ] {
+                if s.get(key) > 0.0 {
+                    parts.push(format!("{} {}", fmt_num(s.get(key)), label));
                 }
+            }
+            // Defensive scores arrive as `def_td` on some entries and
+            // `td` on others; the max covers both shapes.
+            let tds = s.get("def_td").max(s.get("td"));
+            if tds > 0.0 {
+                parts.push(format!("{} TD", fmt_num(tds)));
+            }
+            // Allowed scoring is present for every played game, even a
+            // shutout, so a quiet day still reads as a line.
+            if s.stats.contains_key("pts_allow") {
+                parts.push(format!("{} pts allow", fmt_num(s.get("pts_allow"))));
+            }
+            if s.stats.contains_key("yds_allow") {
+                parts.push(format!("{} yds allow", fmt_num(s.get("yds_allow"))));
             }
             if parts.is_empty() {
                 parts.push(format!("{} pts", fmt_num(s.get("pts_std"))));
             }
-        }
-        "DEF" => {
-            parts.push(format!("{} pts", fmt_num(s.get("pts_std"))));
         }
         _ => {
             for (key, label) in [
@@ -274,19 +321,43 @@ fn week_line(s: &PlayerStats, position: &str) -> String {
                 ("rush_yd", "rush yd"),
                 ("rush_td", "rush TD"),
                 ("rec", "rec"),
-                ("rec_yd", "rec yd"),
-                ("rec_td", "rec TD"),
             ] {
                 if s.get(key) > 0.0 {
                     parts.push(format!("{} {}", fmt_num(s.get(key)), label));
                 }
             }
+            if s.get("rec_tgt") > 0.0 {
+                parts.push(format!("{} tgt", fmt_num(s.get("rec_tgt"))));
+            }
+            for (key, label) in [("rec_yd", "rec yd"), ("rec_td", "rec TD")] {
+                if s.get(key) > 0.0 {
+                    parts.push(format!("{} {}", fmt_num(s.get(key)), label));
+                }
+            }
+            let ret = s.get("kr_yd") + s.get("pr_yd");
+            if ret > 0.0 {
+                parts.push(format!("{} ret yd", fmt_num(ret)));
+            }
+            push_fumbles_2pt(s, &mut parts);
         }
     }
     if parts.is_empty() {
         "-".to_string()
     } else {
         parts.join(", ")
+    }
+}
+
+/// Fumbles lost and 2pt conversions, shared by QBs and skill players.
+/// Only the conversion total is shown: the payload's per-play-type
+/// conversion keys (`rush_2pt`, ...) appear sparsely.
+fn push_fumbles_2pt(s: &PlayerStats, parts: &mut Vec<String>) {
+    if s.get("fum_lost") > 0.0 {
+        parts.push(format!("{} fum lost", fmt_num(s.get("fum_lost"))));
+    }
+    let conv = s.get("rush_2pt") + s.get("rec_2pt") + s.get("pass_2pt");
+    if conv > 0.0 {
+        parts.push(format!("{} 2pt", fmt_num(conv)));
     }
 }
 
@@ -517,5 +588,101 @@ mod tests {
             .collect();
         let v = stats_view(Some(&player), None, None, "pts_std", 2, &abbr);
         assert!(v.bye);
+    }
+
+    fn stat_pairs(pairs: &[(&str, f64)]) -> PlayerStats {
+        PlayerStats {
+            stats: pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
+        }
+    }
+
+    #[test]
+    fn qb_line_reports_sacks_rushes_fumbles_and_conversions() {
+        let s = stat_pairs(&[
+            ("pass_cmp", 24.0),
+            ("pass_att", 38.0),
+            ("pass_yd", 315.0),
+            ("pass_td", 2.0),
+            ("pass_int", 1.0),
+            ("pass_sack", 3.0),
+            ("rush_att", 5.0),
+            ("rush_yd", 45.0),
+            ("fum_lost", 1.0),
+            ("rush_2pt", 1.0),
+        ]);
+        let line = week_line(&s, "QB");
+        assert_eq!(
+            line,
+            "24/38 pass, 315 pass yd, 2 pass TD, 1 INT, 3 sacked, 5 att, 45 rush yd, 1 fum lost, 1 2pt",
+            "got: {line}",
+        );
+    }
+
+    #[test]
+    fn skill_line_reports_targets_returns_fumbles_and_conversions() {
+        let s = stat_pairs(&[
+            ("rush_att", 18.0),
+            ("rush_yd", 92.0),
+            ("rec", 5.0),
+            ("rec_tgt", 8.0),
+            ("rec_yd", 80.0),
+            ("rec_td", 1.0),
+            ("kr_yd", 31.0),
+            ("fum_lost", 1.0),
+            ("rec_2pt", 1.0),
+        ]);
+        let line = week_line(&s, "WR");
+        assert_eq!(
+            line,
+            "18 att, 92 rush yd, 5 rec, 8 tgt, 80 rec yd, 1 rec TD, 31 ret yd, 1 fum lost, 1 2pt",
+            "got: {line}",
+        );
+    }
+
+    #[test]
+    fn kicker_line_reports_makes_attempts_long_and_xp() {
+        let s = stat_pairs(&[
+            ("fga", 3.0),
+            ("fgm", 2.0),
+            ("fgm_30_39", 1.0),
+            ("fgm_50_59", 1.0),
+            ("fgm_lng", 55.0),
+            ("xpa", 2.0),
+            ("xpm", 2.0),
+        ]);
+        let line = week_line(&s, "K");
+        assert_eq!(line, "2/3 FG, lng 55, 2/2 XP", "got: {line}");
+        assert!(!line.contains("fgm_"), "no raw bucket keys: {line}");
+    }
+
+    #[test]
+    fn defense_line_reports_takeaways_scores_and_allowed() {
+        let s = stat_pairs(&[
+            ("sack", 2.0),
+            ("int", 1.0),
+            ("fum_rec", 1.0),
+            ("ff", 1.0),
+            ("def_td", 1.0),
+            ("pts_allow", 20.0),
+            ("yds_allow", 276.0),
+        ]);
+        let line = week_line(&s, "DEF");
+        assert_eq!(
+            line, "2 sacks, 1 INT, 1 FR, 1 FF, 1 TD, 20 pts allow, 276 yds allow",
+            "got: {line}",
+        );
+    }
+
+    #[test]
+    fn defense_shutout_still_reads_as_a_line() {
+        let s = stat_pairs(&[("pts_allow", 0.0), ("yds_allow", 198.0)]);
+        let line = week_line(&s, "DEF");
+        assert_eq!(line, "0 pts allow, 198 yds allow", "got: {line}");
+    }
+
+    #[test]
+    fn defense_without_allowed_keys_falls_back_to_points() {
+        let line = week_line(&stat_pairs(&[]), "DEF");
+        assert_eq!(line, "0 pts", "got: {line}");
     }
 }
